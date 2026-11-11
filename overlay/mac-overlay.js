@@ -57,19 +57,21 @@ function latin1(data) {
   return s.isNil() ? '' : ObjC.unwrap(s);
 }
 
-const CORS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': '*',
-  'Access-Control-Allow-Private-Network': 'true',
-  'Cache-Control': 'no-store',
-};
+// Who may talk to this server. It only listens on 127.0.0.1, so other machines cannot reach it.
+// Web pages open in a browser on this PC could, so requests that carry an Origin are refused
+// unless they come from a browser extension or from this server's own test page. No CORS
+// headers are sent: a web page can neither read the answers nor pass a preflight.
+function originAllowed(origin) {
+  if (!origin) return true; // not a browser page (the extension's GETs, curl, ...)
+  if (/^(chrome|moz|safari-web)-extension:\/\//.test(origin)) return true;
+  return origin === 'http://127.0.0.1:' + state.port || origin === 'http://localhost:' + state.port;
+}
 
 function respond(conn, status, contentType, body) {
   const bodyData = typeof body === 'string' ? $(body).dataUsingEncoding($.NSUTF8StringEncoding) : body;
-  const reason = { 200: 'OK', 204: 'No Content', 400: 'Bad Request', 404: 'Not Found', 413: 'Payload Too Large' }[status] || 'OK';
+  const reason = { 200: 'OK', 204: 'No Content', 400: 'Bad Request', 403: 'Forbidden', 404: 'Not Found', 413: 'Payload Too Large' }[status] || 'OK';
   let head = 'HTTP/1.1 ' + status + ' ' + reason + '\r\n';
-  const headers = Object.assign({}, CORS, { 'Content-Length': String(bodyData.length), Connection: 'close' });
+  const headers = { 'Cache-Control': 'no-store', 'Content-Length': String(bodyData.length), Connection: 'close' };
   if (contentType) headers['Content-Type'] = contentType;
   for (const k in headers) head += k + ': ' + headers[k] + '\r\n';
   head += '\r\n';
@@ -146,8 +148,9 @@ function handleEvents(events) {
   return clean.length;
 }
 
-function handleRequest(conn, method, path, body) {
+function handleRequest(conn, method, path, body, origin) {
   path = path.split('?')[0];
+  if (!originAllowed(origin)) return respond(conn, 403, 'text/plain', 'forbidden');
   if (method === 'OPTIONS') return respond(conn, 204, null, '');
   if (method === 'GET' && path === '/ping') {
     return respond(conn, 200, 'application/json', JSON.stringify({ ok: true, app: 'meet-comment-overlay', paused: state.paused, counts: state.counts }));
@@ -214,16 +217,19 @@ function tryHandle(conn, data) {
   const lines = text.slice(0, headerEnd).split('\r\n');
   const [method, path] = lines[0].split(' ');
   let length = 0;
+  let origin = '';
   for (const line of lines.slice(1)) {
     const m = /^content-length:\s*(\d+)/i.exec(line);
     if (m) length = parseInt(m[1], 10);
+    const o = /^origin:\s*(.*)$/i.exec(line);
+    if (o) origin = o[1].trim();
   }
   if (length > MAX_BODY) { respond(conn, 413, 'text/plain', 'too large'); return true; }
   const bodyStart = headerEnd + 4;
   if (data.length < bodyStart + length) return false;
   const body = length ? utf8(data.subdataWithRange($.NSMakeRange(bodyStart, length))) : '';
   try {
-    handleRequest(conn, method, path || '/', body);
+    handleRequest(conn, method, path || '/', body, origin);
   } catch (e) {
     log('request error: ' + e);
     respond(conn, 400, 'text/plain', 'error');

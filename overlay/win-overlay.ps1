@@ -518,12 +518,8 @@ $Utf8 = New-Object System.Text.UTF8Encoding $false
 
 function Send-Response($Conn, [int]$Status, [string]$ContentType, [byte[]]$Body) {
   if ($null -eq $Body) { $Body = New-Object byte[] 0 }
-  $reason = switch ($Status) { 200 { 'OK' } 204 { 'No Content' } 400 { 'Bad Request' } 404 { 'Not Found' } 413 { 'Payload Too Large' } default { 'OK' } }
+  $reason = switch ($Status) { 200 { 'OK' } 204 { 'No Content' } 400 { 'Bad Request' } 403 { 'Forbidden' } 404 { 'Not Found' } 413 { 'Payload Too Large' } default { 'OK' } }
   $head = "HTTP/1.1 $Status $reason`r`n" +
-    "Access-Control-Allow-Origin: *`r`n" +
-    "Access-Control-Allow-Methods: GET, POST, OPTIONS`r`n" +
-    "Access-Control-Allow-Headers: *`r`n" +
-    "Access-Control-Allow-Private-Network: true`r`n" +
     "Cache-Control: no-store`r`n" +
     "Connection: close`r`n" +
     "Content-Length: $($Body.Length)`r`n"
@@ -559,8 +555,17 @@ function Invoke-Request($Conn) {
   $method = $parts[0]
   $path = if ($parts.Length -gt 1) { ($parts[1] -split '\?')[0] } else { '/' }
   $length = 0
+  $origin = ''
   foreach ($line in $lines) {
     if ($line -match '^(?i)content-length:\s*(\d+)') { $length = [int]$Matches[1] }
+    if ($line -match '^(?i)origin:\s*(.*)$') { $origin = $Matches[1].Trim() }
+  }
+  # This server only listens on 127.0.0.1. Web pages open in a browser on this PC could still
+  # reach it, so requests that carry an Origin are refused unless they come from a browser
+  # extension or from this server's own test page. No CORS headers are sent either.
+  if ($origin -and $origin -notmatch '^(chrome|moz|safari-web)-extension://' -and $origin -ne "http://127.0.0.1:$Port" -and $origin -ne "http://localhost:$Port") {
+    Send-Response $Conn 403 'text/plain' ($Utf8.GetBytes('forbidden'))
+    return $true
   }
   if ($length -gt 262144) { Send-Response $Conn 413 'text/plain' $null; return $true }
   $bodyStart = $headerEnd + 4
