@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Meet Comment Overlay</title>
+<style>
+  html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: default;
+  }
+  .comment {
+    position: absolute;
+    left: 0;
+    top: 0;
+    white-space: pre;
+    font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", system-ui, sans-serif;
+    font-weight: 800;
+    line-height: 1.25;
+    color: #fff;
+    -webkit-text-stroke: var(--stroke) rgba(0, 0, 0, 0.85);
+    paint-order: stroke fill;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+    will-change: transform;
+  }
+  .comment .author {
+    font-size: 0.5em;
+    font-weight: 700;
+    margin-left: 0.6em;
+    opacity: 0.85;
+  }
+  .reaction {
+    position: absolute;
+    left: 0;
+    top: 0;
+    line-height: 1;
+    font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+    will-change: transform, opacity;
+    filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.25));
+  }
+  .reaction img {
+    display: block;
+  }
+  .reaction .count {
+    position: absolute;
+    left: 78%;
+    bottom: -6%;
+    padding: 0 0.35em;
+    border-radius: 999px;
+    background: rgba(32, 33, 36, 0.85);
+    color: #fff;
+    font: 700 15px/1.5 "Hiragino Sans", system-ui, sans-serif;
+    white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<script>
+(() => {
+  // Settings can be overridden with query parameters, e.g. overlay.html?top=40&showAuthor=1
+  // The macOS host injects window.OVERLAY_CONFIG; query parameters work when opened directly.
+  const params = new URLSearchParams(location.search);
+  const injected = window.OVERLAY_CONFIG || {};
+  const num = (key, fallback) => {
+    const v = parseFloat(key in injected ? injected[key] : params.get(key));
+    return Number.isFinite(v) ? v : fallback;
+  };
+  const config = {
+    topInset: num('top', 0),             // px kept clear at the top (menu bar / notch)
+    fontScale: num('fontScale', 1),      // 1 = screen height / 20
+    secondsOnScreen: num('seconds', 6),  // time for a short comment to cross the screen
+    maxComments: num('maxComments', 80),
+    showAuthor: String(injected.showAuthor ?? params.get('showAuthor')) === '1',
+    maxLength: num('maxLength', 80),
+    // Reactions match Meet's own (measured): 43 px, straight up at 136 px/s for 3.05 s,
+    // fully visible until 72 % of the way and then fading out.
+    reactionSize: num('reactionSize', 43),
+    reactionSpeed: num('reactionSpeed', 136),
+    reactionMs: num('reactionMs', 3050),
+    reactionFadeFrom: num('reactionFadeFrom', 0.72),
+    // Above this many reactions on screen, bursts of the same emoji become one "×N" bubble
+    // instead of N separate ones, so every reaction is still represented.
+    busyReactions: num('busyReactions', 24),
+  };
+
+  const lanes = []; // per lane: time (ms) when a new comment may enter without touching the previous one
+  const live = { comments: 0, reactions: 0, received: 0 };
+  const report = () => { document.title = `overlay ready received=${live.received} comments=${live.comments} reactions=${live.reactions} animated=${[...animated.values()].filter(Boolean).length} ${window.innerWidth}x${window.innerHeight}`; };
+
+  // `style` comes with each comment from the extension's settings: { fontScale, seconds }.
+  function metrics(style) {
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const scale = style && style.fontScale > 0 ? style.fontScale : 1;
+    const fontSize = Math.max(14, Math.round((H / 20) * config.fontScale * scale));
+    const laneHeight = Math.round(fontSize * 1.3);
+    const usable = H - config.topInset - fontSize * 0.5;
+    const laneCount = Math.max(1, Math.floor(usable / laneHeight));
+    const speed = W / (style && style.seconds > 0 ? style.seconds : config.secondsOnScreen); // px per second, same for every comment so they never overtake
+    return { W, H, fontSize, laneHeight, laneCount, speed };
+  }
+
+  function pickLane(now, laneCount) {
+    // Top-most lane that is free; when all are busy, the one that frees up first.
+    let best = 0;
+    let bestTime = Infinity;
+    for (let i = 0; i < laneCount; i++) {
+      const freeAt = lanes[i] || 0;
+      if (freeAt <= now) return i;
+      if (freeAt < bestTime) { bestTime = freeAt; best = i; }
+    }
+    return best;
+  }
+
+  function addComment(text, author, style) {
+    text = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!text) return;
+    if (text.length > config.maxLength) text = text.slice(0, config.maxLength - 1) + '…';
+    if (live.comments >= config.maxComments) return;
+
+    const m = metrics(style);
+    const el = document.createElement('div');
+    el.className = 'comment';
+    el.style.fontSize = m.fontSize + 'px';
+    el.style.setProperty('--stroke', Math.max(2, Math.round(m.fontSize * 0.11)) + 'px');
+    el.textContent = text;
+    if (config.showAuthor && author) {
+      const a = document.createElement('span');
+      a.className = 'author';
+      a.textContent = author;
+      el.appendChild(a);
+    }
+    el.style.transform = `translate(${m.W}px, -9999px)`;
+    document.body.appendChild(el);
+
+    const width = el.getBoundingClientRect().width;
+    const now = performance.now();
+    const lane = pickLane(now, m.laneCount);
+    const gap = m.fontSize * 1.2;
+    lanes[lane] = now + ((width + gap) / m.speed) * 1000;
+
+    const y = config.topInset + lane * m.laneHeight;
+    const distance = m.W + width;
+    const duration = (distance / m.speed) * 1000;
+    live.comments++;
+    const anim = el.animate(
+      [
+        { transform: `translate(${m.W}px, ${y}px)` },
+        { transform: `translate(${-width}px, ${y}px)` },
+      ],
+      { duration, easing: 'linear', fill: 'forwards' }
+    );
+    anim.onfinish = () => { el.remove(); live.comments--; };
+  }
+
+  // Animated Noto Emoji, the same artwork Meet uses for its reactions. Emoji without an
+  // animated version (or when offline) fall back to the system emoji font.
+  const ANIMATED_BASE = 'https://fonts.gstatic.com/s/e/notoemoji/latest/';
+  const animated = new Map(); // emoji -> working URL, or null when there is none
+
+  function animatedUrls(emoji) {
+    const cps = [...emoji].map((c) => c.codePointAt(0).toString(16));
+    const full = cps.join('_');
+    const bare = cps.filter((c) => c !== 'fe0f').join('_');
+    const names = [...new Set([full, bare])];
+    // animated first, then Noto's still image for emoji that have no animation
+    return [...names.map((n) => ANIMATED_BASE + n + '/512.webp'), ...names.map((n) => ANIMATED_BASE + n + '/512.png')];
+  }
+
+  function showEmoji(el, emoji, size) {
+    if (animated.get(emoji) === null) {
+      el.textContent = emoji;
+      return;
+    }
+    const urls = animated.has(emoji) ? [animated.get(emoji)] : animatedUrls(emoji);
+    const img = document.createElement('img');
+    img.alt = emoji;
+    img.width = img.height = size;
+    img.draggable = false;
+    let i = 0;
+    img.onload = () => animated.set(emoji, urls[i]);
+    img.onerror = () => {
+      if (++i < urls.length) {
+        img.src = urls[i];
+      } else {
+        animated.set(emoji, null);
+        img.remove();
+        el.textContent = emoji;
+      }
+    };
+    img.src = urls[0];
+    el.appendChild(img);
+  }
+
+  // Fetch Meet's standard reactions ahead of time so the first one does not appear late.
+  for (const e of ['💖', '👍', '🎉', '👏', '😂', '😮', '😢', '🤔', '👎']) {
+    const urls = animatedUrls(e);
+    const img = new Image();
+    img.onload = () => { animated.set(e, urls[0]); report(); };
+    img.src = urls[0];
+  }
+
+  function addReaction(emoji, count) {
+    const { W, H } = metrics();
+    const size = Math.round(config.reactionSize);
+    const el = document.createElement('div');
+    el.className = 'reaction';
+    el.style.fontSize = size + 'px';
+    showEmoji(el, emoji, size);
+    if (count > 1) {
+      const badge = document.createElement('span');
+      badge.className = 'count';
+      badge.textContent = '×' + count;
+      el.appendChild(badge);
+    }
+    document.body.appendChild(el);
+
+    // Straight up from near the bottom, like Meet.
+    const x = W * (0.04 + Math.random() * 0.92) - size / 2;
+    const y0 = H - size - Math.min(160, H * 0.15);
+    const rise = (config.reactionSpeed * config.reactionMs) / 1000;
+    const at = (t, opacity) => ({ offset: t, transform: `translate(${x}px, ${y0 - rise * t}px)`, opacity });
+    live.reactions++;
+    const anim = el.animate(
+      [at(0, 1), at(config.reactionFadeFrom, 1), at(1, 0)],
+      { duration: config.reactionMs, easing: 'linear', fill: 'forwards' }
+    );
+    anim.onfinish = () => { el.remove(); live.reactions--; };
+  }
+
+  // Reactions are collected for a moment and then released, so nothing is dropped:
+  // with room on screen each one gets its own emoji; when busy, a burst becomes "×N".
+  const pending = new Map(); // emoji -> count
+  function queueReaction(emoji, count) {
+    emoji = String(emoji || '').trim();
+    if (!emoji || emoji.length > 16) return;
+    pending.set(emoji, (pending.get(emoji) || 0) + Math.max(1, count | 0));
+  }
+
+  setInterval(() => {
+    if (!pending.size) return;
+    const batch = [...pending];
+    pending.clear();
+    let room = Math.max(0, config.busyReactions - live.reactions);
+    for (const [emoji, n] of batch) {
+      if (n <= room) {
+        for (let i = 0; i < n; i++) setTimeout(() => addReaction(emoji, 1), i * 70);
+        room -= n;
+      } else {
+        const singles = Math.max(0, room - 1);
+        for (let i = 0; i < singles; i++) setTimeout(() => addReaction(emoji, 1), i * 70);
+        setTimeout(() => addReaction(emoji, n - singles), singles * 70);
+        room = 0;
+      }
+    }
+    report();
+  }, 150);
+
+  function push(events) {
+    if (!Array.isArray(events)) events = [events];
+    live.received += events.length;
+    for (const e of events) {
+      if (!e || typeof e !== 'object') continue;
+      if (e.type === 'comment') addComment(e.text, e.author, e);
+      else if (e.type === 'reaction') queueReaction(e.emoji, e.count);
+    }
+    report();
+  }
+
+  window.nico = { push, addComment, addReaction: queueReaction, config };
+  report();
+})();
+</script>
+</body>
+</html>

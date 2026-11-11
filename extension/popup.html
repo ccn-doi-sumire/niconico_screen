@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Meet Comment Overlay</title>
+<style>
+  :root { --bg: #f7f8fb; --card: #fff; --text: #1d2330; --muted: #5f6878; --line: #cfd5df; --accent: #1f5fd0; --accent-text: #fff; --soft: #e8eefb; --ok: #1e7a3c; --err: #b3261e; --warn: #8a5a00; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #171b22; --card: #1f252e; --text: #e8ebf0; --muted: #a3acba; --line: #3a4350; --accent: #8ab4f8; --accent-text: #10203a; --soft: #26303f; --ok: #7fd49a; --err: #f2a59f; --warn: #f0c36d; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; width: 360px; background: var(--bg); color: var(--text); font: 13px/1.6 system-ui, -apple-system, "Hiragino Sans", "Yu Gothic UI", sans-serif; }
+  header { padding: 14px 16px 12px; background: var(--card); border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 15px; margin: 0; }
+  #status { margin: 2px 0 0; color: var(--muted); }
+  #status.ok::before { content: "● "; color: var(--ok); }
+  #status.off::before { content: "● "; color: var(--err); }
+  #status.paused::before { content: "● "; color: var(--muted); }
+  .meet-button { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: #2d2f31; color: #e3e3e3; vertical-align: middle; }
+  main { padding: 14px 16px 4px; }
+  section { margin-bottom: 18px; }
+  h2 { font-size: 13px; margin: 0 0 8px; }
+  .row { display: flex; gap: 10px; }
+  .row > div { flex: 1; min-width: 0; }
+  .field { display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+  select, textarea { width: 100%; font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; }
+  textarea { height: 96px; resize: vertical; }
+  select:focus-visible, textarea:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+  .screen { display: flex; align-items: center; gap: 8px; padding: 7px 9px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px; cursor: pointer; }
+  .screen small { color: var(--muted); margin-left: auto; white-space: nowrap; }
+  input[type="radio"] { accent-color: var(--accent); margin: 0; }
+  button { font: inherit; font-weight: 600; border-radius: 8px; padding: 7px 12px; cursor: pointer; border: 1px solid var(--line); background: var(--soft); color: var(--text); }
+  button.plain { display: inline-flex; align-items: center; gap: 5px; border-color: transparent; background: transparent; color: var(--accent); padding: 7px 6px; }
+  button.plain:hover { text-decoration: underline; }
+  button.go { background: var(--ok); border-color: var(--ok); color: var(--accent-text); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); padding: 8px 18px; }
+  .buttons { display: flex; gap: 8px; margin-top: 8px; }
+  footer { position: sticky; bottom: 0; display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: var(--card); border-top: 1px solid var(--line); }
+  #message { flex: 1; min-width: 0; font-size: 12px; font-weight: 600; color: var(--warn); }
+  button:disabled { opacity: 0.45; cursor: default; }
+  #message.err { color: var(--err); }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Meet Comment Overlay</h1>
+    <p id="status">オーバーレイを確認中…</p>
+  </header>
+  <main>
+    <section id="screen-section" hidden>
+      <h2>表示する画面</h2>
+      <div id="screens"></div>
+    </section>
+
+    <section>
+      <h2>コメントの表示</h2>
+      <div class="row">
+        <div>
+          <label class="field" for="size">文字サイズ</label>
+          <select id="size">
+            <option value="small">小さめ</option>
+            <option value="normal">標準</option>
+            <option value="large">大きめ</option>
+            <option value="xlarge">特大</option>
+          </select>
+        </div>
+        <div>
+          <label class="field" for="speed">流れる速さ</label>
+          <select id="speed">
+            <option value="slow">ゆっくり（9秒）</option>
+            <option value="normal">標準（6秒）</option>
+            <option value="fast">速い（4秒）</option>
+          </select>
+        </div>
+      </div>
+      <div class="buttons">
+        <button id="reset" class="plain" type="button" title="サイズ・速さを標準に戻す">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.6-5.9"/><path d="M4 4v4.5h4.5"/></svg>
+          リセット
+        </button>
+        <button id="test" class="go" type="button">テストする</button>
+      </div>
+    </section>
+
+    <section>
+      <h2><label for="ng">NGワード（1行に1件）</label></h2>
+      <textarea id="ng" placeholder="例：議事録を作成しています&#10;例：recording bot"></textarea>
+      <p class="hint">大文字・小文字、全角・半角は区別しません。</p>
+    </section>
+  </main>
+  <footer>
+    <span id="message" role="status"></span>
+    <button id="save" class="primary" type="button">保存する</button>
+  </footer>
+  <script src="popup.js"></script>
+</body>
+</html>
