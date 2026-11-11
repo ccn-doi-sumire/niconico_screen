@@ -1,6 +1,6 @@
 # Meet Comment Overlay
 
-<img width="720" height="405" alt="demo" src="https://github.com/user-attachments/assets/4c4bd66e-cae8-47fe-9d36-09bba893b700" />
+<img width="720" height="405" alt="demo" src="docs/demo.gif" />
 
 Google Meet のチャットとリアクションを、デスクトップの上にニコニコ動画風に流すツールです。
 発表者が画面共有しているスライドの上に、参加者のコメントが右から左へ、リアクションの絵文字が下から上へ流れます。
