@@ -46,17 +46,6 @@
   .reaction img {
     display: block;
   }
-  .reaction .count {
-    position: absolute;
-    left: 78%;
-    bottom: -6%;
-    padding: 0 0.35em;
-    border-radius: 999px;
-    background: rgba(32, 33, 36, 0.85);
-    color: #fff;
-    font: 700 15px/1.5 "Hiragino Sans", system-ui, sans-serif;
-    white-space: nowrap;
-  }
 </style>
 </head>
 <body>
@@ -83,9 +72,10 @@
     reactionSpeed: num('reactionSpeed', 136),
     reactionMs: num('reactionMs', 3050),
     reactionFadeFrom: num('reactionFadeFrom', 0.72),
-    // Above this many reactions on screen, bursts of the same emoji become one "×N" bubble
-    // instead of N separate ones, so every reaction is still represented.
+    // Every reaction gets its own emoji; nothing is merged or dropped. Above this many on
+    // screen they are only drawn more simply, as Meet does: smaller and as a still image.
     busyReactions: num('busyReactions', 24),
+    reactionSizeBusy: num('reactionSizeBusy', 32),
   };
 
   const lanes = []; // per lane: time (ms) when a new comment may enter without touching the previous one
@@ -172,23 +162,28 @@
     return [...names.map((n) => ANIMATED_BASE + n + '/512.webp'), ...names.map((n) => ANIMATED_BASE + n + '/512.png')];
   }
 
-  function showEmoji(el, emoji, size) {
+  function stillUrls(emoji) {
+    return animatedUrls(emoji).filter((u) => u.endsWith('.png'));
+  }
+
+  // `simple`: the still image instead of the animated one (used while the screen is busy).
+  function showEmoji(el, emoji, size, simple) {
     if (animated.get(emoji) === null) {
       el.textContent = emoji;
       return;
     }
-    const urls = animated.has(emoji) ? [animated.get(emoji)] : animatedUrls(emoji);
+    const urls = simple ? stillUrls(emoji) : animated.has(emoji) ? [animated.get(emoji)] : animatedUrls(emoji);
     const img = document.createElement('img');
     img.alt = emoji;
     img.width = img.height = size;
     img.draggable = false;
     let i = 0;
-    img.onload = () => animated.set(emoji, urls[i]);
+    img.onload = () => { if (!simple) animated.set(emoji, urls[i]); };
     img.onerror = () => {
       if (++i < urls.length) {
         img.src = urls[i];
       } else {
-        animated.set(emoji, null);
+        if (!simple) animated.set(emoji, null);
         img.remove();
         el.textContent = emoji;
       }
@@ -203,21 +198,16 @@
     const img = new Image();
     img.onload = () => { animated.set(e, urls[0]); report(); };
     img.src = urls[0];
+    new Image().src = stillUrls(e)[0];
   }
 
-  function addReaction(emoji, count) {
+  function addReaction(emoji, simple) {
     const { W, H } = metrics();
-    const size = Math.round(config.reactionSize);
+    const size = Math.round(simple ? config.reactionSizeBusy : config.reactionSize);
     const el = document.createElement('div');
     el.className = 'reaction';
     el.style.fontSize = size + 'px';
-    showEmoji(el, emoji, size);
-    if (count > 1) {
-      const badge = document.createElement('span');
-      badge.className = 'count';
-      badge.textContent = '×' + count;
-      el.appendChild(badge);
-    }
+    showEmoji(el, emoji, size, simple);
     document.body.appendChild(el);
 
     // Straight up from near the bottom, like Meet.
@@ -233,8 +223,8 @@
     anim.onfinish = () => { el.remove(); live.reactions--; };
   }
 
-  // Reactions are collected for a moment and then released, so nothing is dropped:
-  // with room on screen each one gets its own emoji; when busy, a burst becomes "×N".
+  // Reactions are collected for a moment and then released one by one: each reaction is
+  // always drawn as its own emoji. A burst is spread over a short time so they do not overlap.
   const pending = new Map(); // emoji -> count
   function queueReaction(emoji, count) {
     emoji = String(emoji || '').trim();
@@ -246,16 +236,10 @@
     if (!pending.size) return;
     const batch = [...pending];
     pending.clear();
-    let room = Math.max(0, config.busyReactions - live.reactions);
     for (const [emoji, n] of batch) {
-      if (n <= room) {
-        for (let i = 0; i < n; i++) setTimeout(() => addReaction(emoji, 1), i * 70);
-        room -= n;
-      } else {
-        const singles = Math.max(0, room - 1);
-        for (let i = 0; i < singles; i++) setTimeout(() => addReaction(emoji, 1), i * 70);
-        setTimeout(() => addReaction(emoji, n - singles), singles * 70);
-        room = 0;
+      const gap = Math.min(70, 600 / n);
+      for (let i = 0; i < n; i++) {
+        setTimeout(() => addReaction(emoji, live.reactions >= config.busyReactions), i * gap);
       }
     }
     report();

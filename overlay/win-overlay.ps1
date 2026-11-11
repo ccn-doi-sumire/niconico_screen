@@ -67,8 +67,10 @@ $Settings = @{
   ReactionSpeed    = 136
   ReactionMs       = 3050
   ReactionFadeFrom = 0.72
-  # Above this many reactions on screen, a burst of the same emoji becomes one "xN" bubble.
+  # Every reaction gets its own emoji; nothing is merged or dropped. Above this many on screen
+  # they are only drawn more simply, as Meet does: smaller and as a still image.
   BusyReactions    = 24
+  ReactionSizeBusy = 32
   ShowAuthor       = $false
 }
 
@@ -400,14 +402,14 @@ function Start-EmojiDownload($Job) {
   $client.DownloadDataAsync([Uri]$Job.Attempts[$Job.Index].Url, $Job)
 }
 
-function New-ReactionVisual([string]$Emoji, [double]$Size) {
+function New-ReactionVisual([string]$Emoji, [double]$Size, [bool]$Simple = $false) {
   $cached = $State.Emoji[$Emoji]
   if ($null -eq $cached) { Request-EmojiImage $Emoji }
   if ($null -ne $cached -and $cached.Kind -eq 'gif') {
     $img = New-Object System.Windows.Controls.Image
     $img.Width = $Size; $img.Height = $Size
     $img.Source = $cached.First
-    $img.BeginAnimation([System.Windows.Controls.Image]::SourceProperty, $cached.Animation)
+    if (-not $Simple) { $img.BeginAnimation([System.Windows.Controls.Image]::SourceProperty, $cached.Animation) }
     return $img
   }
   if ($null -ne $cached -and $cached.Kind -eq 'png') {
@@ -427,35 +429,10 @@ function New-ReactionVisual([string]$Emoji, [double]$Size) {
   return $text
 }
 
-function Add-Reaction([string]$Emoji, [int]$Count = 1) {
+function Add-Reaction([string]$Emoji, [bool]$Simple = $false) {
   $m = Get-Metrics
-  $size = [double]$Settings.ReactionSize
-  $visual = New-ReactionVisual $Emoji $size
-  $element = $visual
-  if ($Count -gt 1) {
-    # "xN" bubble at the lower right of the emoji.
-    $label = New-Object System.Windows.Controls.TextBlock
-    $label.Text = [string][char]0x00D7 + $Count
-    $label.Foreground = [System.Windows.Media.Brushes]::White
-    $label.FontFamily = New-Object System.Windows.Media.FontFamily 'Yu Gothic UI, Segoe UI'
-    $label.FontWeight = [System.Windows.FontWeights]::Bold
-    $label.FontSize = 15
-    $bubble = New-Object System.Windows.Controls.Border
-    $bubble.Background = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromArgb(217, 32, 33, 36))
-    $bubble.CornerRadius = New-Object System.Windows.CornerRadius 10
-    $bubble.Padding = New-Object System.Windows.Thickness (6, 0, 6, 1)
-    $bubble.Child = $label
-    $bubble.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Left
-    $bubble.VerticalAlignment = [System.Windows.VerticalAlignment]::Bottom
-    $bubble.Margin = New-Object System.Windows.Thickness (($size * 0.78), 0, 0, (-$size * 0.06))
-    $grid = New-Object System.Windows.Controls.Grid
-    $grid.Width = $size * 2.2
-    $grid.Height = $size
-    $visual.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Left
-    [void]$grid.Children.Add($visual)
-    [void]$grid.Children.Add($bubble)
-    $element = $grid
-  }
+  $size = if ($Simple) { [double]$Settings.ReactionSizeBusy } else { [double]$Settings.ReactionSize }
+  $element = New-ReactionVisual $Emoji $size $Simple
   $rnd = $State.Random
 
   # Straight up from near the bottom, like Meet.
@@ -479,31 +456,22 @@ function Add-Reaction([string]$Emoji, [int]$Count = 1) {
   Add-Item $element $duration 'reaction'
 }
 
-# Reactions are collected for a moment and then released, so nothing is dropped:
-# with room on screen each one gets its own emoji; when busy, a burst becomes "xN".
+# Reactions are collected for a moment and then released one by one: each reaction is always
+# drawn as its own emoji. A burst is spread over a short time so they do not overlap.
 function Invoke-ReactionFlush {
   if ($State.Pending.Count -eq 0) { return }
   $batch = @($State.Pending.GetEnumerator() | ForEach-Object { @{ Emoji = $_.Key; Count = [int]$_.Value } })
   $State.Pending.Clear()
-  $room = [Math]::Max(0, $Settings.BusyReactions - (Get-LiveCount 'reaction'))
   $now = [DateTime]::UtcNow
   foreach ($b in $batch) {
-    $n = $b.Count
-    if ($n -le $room) {
-      for ($i = 0; $i -lt $n; $i++) { [void]$PendingReactions.Add(@{ Emoji = $b.Emoji; Count = 1; At = $now.AddMilliseconds(70 * $i) }) }
-      $room -= $n
-    } else {
-      $singles = [Math]::Max(0, $room - 1)
-      for ($i = 0; $i -lt $singles; $i++) { [void]$PendingReactions.Add(@{ Emoji = $b.Emoji; Count = 1; At = $now.AddMilliseconds(70 * $i) }) }
-      [void]$PendingReactions.Add(@{ Emoji = $b.Emoji; Count = ($n - $singles); At = $now.AddMilliseconds(70 * $singles) })
-      $room = 0
-    }
+    $gap = [Math]::Min(70, 600 / $b.Count)
+    for ($i = 0; $i -lt $b.Count; $i++) { [void]$PendingReactions.Add(@{ Emoji = $b.Emoji; At = $now.AddMilliseconds($gap * $i) }) }
   }
 }
 
 # ------------------------------------------------------------------ events
 
-$PendingReactions = New-Object System.Collections.ArrayList   # @{ Emoji; Count; At } waiting to be drawn
+$PendingReactions = New-Object System.Collections.ArrayList   # @{ Emoji; At } waiting to be drawn
 
 function Invoke-Events($Events) {
   $accepted = 0
@@ -751,7 +719,10 @@ $Timer.Add_Tick({
       if ($PendingReactions[$i].At -le $now) {
         $p = $PendingReactions[$i]
         $PendingReactions.RemoveAt($i)
-        if (-not $State.Paused) { Add-Reaction $p.Emoji $p.Count }
+        if (-not $State.Paused) {
+          $busy = (Get-LiveCount 'reaction') -ge $Settings.BusyReactions
+          Add-Reaction $p.Emoji $busy
+        }
       }
     }
     if ($State.Tick % 8 -eq 0) {
