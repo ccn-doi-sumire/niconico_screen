@@ -1,5 +1,5 @@
 #!/bin/bash
-# Double-click to start the overlay on macOS. Quit from the 💬 menu bar icon or with Ctrl+C here.
+# Double-click to start the overlay on macOS. Quit from the menu bar icon (a screen with a speech bubble) or with Ctrl+C here.
 #   ./start-mac.command        main screen (the one with the menu bar)
 #   ./start-mac.command 1      second screen
 #   ./start-mac.command -1     every screen

@@ -340,10 +340,58 @@ ObjC.registerSubclass({
 });
 const controller = $.MCOController.alloc.init;
 
+// The same picture as the button in Meet: a screen with a speech bubble; struck through while paused.
+// Drawn in the button's 24 x 24 SVG coordinates (y down), scaled to an 18 pt menu bar image.
+function statusIcon(paused) {
+  const side = 18;
+  const img = $.NSImage.alloc.initWithSize($.NSMakeSize(side, side));
+  img.lockFocus;
+  const t = $.NSAffineTransform.transform;
+  t.translateXByYBy(0, side);
+  t.scaleXByYBy(side / 24, -side / 24);
+  t.concat;
+  $.NSColor.blackColor.set;
+  const stroke = (path, width) => {
+    path.lineWidth = width;
+    path.lineCapStyle = 1; // round
+    path.lineJoinStyle = 1;
+    path.stroke;
+  };
+  stroke($.NSBezierPath.bezierPathWithRoundedRectXRadiusYRadius($.NSMakeRect(2.5, 4, 19, 13), 2, 2), 1.8);
+  const stand = $.NSBezierPath.bezierPath;
+  stand.moveToPoint($.NSMakePoint(8.5, 20.5));
+  stand.lineToPoint($.NSMakePoint(15.5, 20.5));
+  stand.moveToPoint($.NSMakePoint(12, 17));
+  stand.lineToPoint($.NSMakePoint(12, 20.5));
+  stroke(stand, 1.8);
+  const bubble = $.NSBezierPath.bezierPath; // M7.5 7.5h9v5h-5l-2.2 1.9v-1.9H7.5z
+  bubble.moveToPoint($.NSMakePoint(7.5, 7.5));
+  bubble.lineToPoint($.NSMakePoint(16.5, 7.5));
+  bubble.lineToPoint($.NSMakePoint(16.5, 12.5));
+  bubble.lineToPoint($.NSMakePoint(11.5, 12.5));
+  bubble.lineToPoint($.NSMakePoint(9.3, 14.4));
+  bubble.lineToPoint($.NSMakePoint(9.3, 12.5));
+  bubble.lineToPoint($.NSMakePoint(7.5, 12.5));
+  bubble.closePath;
+  bubble.fill;
+  if (paused) {
+    const slash = $.NSBezierPath.bezierPath;
+    slash.moveToPoint($.NSMakePoint(3, 2.5));
+    slash.lineToPoint($.NSMakePoint(21, 21.5));
+    stroke(slash, 2);
+  }
+  img.unlockFocus;
+  img.template = true; // macOS tints it for light and dark menu bars
+  return img;
+}
+
 function updateStatusTitle() {
   if (!state.statusItem) return;
-  const title = state.paused ? '💬⏸' : '💬';
-  state.statusItem.button.title = title;
+  if (state.iconPaused !== state.paused) {
+    state.iconPaused = state.paused;
+    state.statusItem.button.title = '';
+    state.statusItem.button.image = statusIcon(state.paused);
+  }
   state.statusItem.button.toolTip = 'Meet Comment Overlay  コメント ' + state.counts.comments + ' / リアクション ' + state.counts.reactions;
 }
 
@@ -517,7 +565,7 @@ function run(argv) {
   app.setActivationPolicy($.NSApplicationActivationPolicyAccessory);
 
   if (overlayAlreadyRunning(state.port)) {
-    log('オーバーレイはすでに起動しています（ポート ' + state.port + '）。メニューバーの 💬 から操作してください。');
+    log('オーバーレイはすでに起動しています（ポート ' + state.port + '）。メニューバーのアイコン（モニターに吹き出し）から操作してください。');
     return;
   }
   if (!startServer(state.port)) {
@@ -535,6 +583,6 @@ function run(argv) {
   setupStatusItem();
 
   log('起動しました: http://127.0.0.1:' + state.port + '/  (画面数 ' + screens.count + ', 表示中 ' + state.windows.length + ')');
-  log('終了するにはメニューバーの 💬 → 終了、またはこのウィンドウで Ctrl+C');
+  log('終了するにはメニューバーのアイコン（モニターに吹き出し）→ 終了、またはこのウィンドウで Ctrl+C');
   app.run;
 }

@@ -678,6 +678,14 @@ function Start-Server {
 
 $Notify = New-Object System.Windows.Forms.NotifyIcon
 $Notify.Icon = [System.Drawing.SystemIcons]::Information
+try {
+  # the extension's icon (a screen with a speech bubble), when it is next to this folder
+  $iconFile = Join-Path (Split-Path $PSScriptRoot -Parent) 'extension\icons\icon32.png'
+  if (Test-Path $iconFile) {
+    $iconBitmap = New-Object System.Drawing.Bitmap $iconFile
+    $Notify.Icon = [System.Drawing.Icon]::FromHandle($iconBitmap.GetHicon())
+  }
+} catch { }
 $Notify.Text = "Meet Comment Overlay (port $Port)"
 $Menu = New-Object System.Windows.Forms.ContextMenuStrip
 $MenuTest = $Menu.Items.Add('テストコメントを流す')
